@@ -1,0 +1,127 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0b0e14;
+  --surface: #111520;
+  --surface-hover: #161c2a;
+  --border: #1e2a40;
+  --cyan: #00e5ff;
+  --purple: #a855f7;
+  --success: #00e676;
+  --warning: #ffab40;
+  --danger: #ff5252;
+  --text: #e2e8f4;
+  --text-secondary: #6a8099;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+.font-mono { font-family: 'JetBrains Mono', monospace; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e2a40; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #2a3a55; }
+
+/* Input autofill fix */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0px 1000px #111520 inset !important;
+  -webkit-text-fill-color: #e2e8f4 !important;
+  caret-color: #e2e8f4;
+}
+
+/* Accent line on top of cards */
+.card-accent-cyan {
+  position: relative;
+  background: #111520;
+  border: 1px solid #1e2a40;
+  border-radius: 14px;
+  overflow: hidden;
+}
+.card-accent-cyan::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, #00e5ff, transparent);
+  opacity: 0.7;
+}
+.card-accent-purple {
+  position: relative;
+  background: #111520;
+  border: 1px solid #1e2a40;
+  border-radius: 14px;
+  overflow: hidden;
+}
+.card-accent-purple::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, #a855f7, transparent);
+  opacity: 0.7;
+}
+
+/* Pulse for allergy banner */
+@keyframes pulseRed {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 82, 82, 0); }
+}
+.pulse-red { animation: pulseRed 2s infinite; }
+
+/* Shimmer skeleton */
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #111520 0%, #1a2030 50%, #111520 100%);
+  background-size: 1000px 100%;
+  animation: shimmer 1.6s infinite linear;
+}
+
+.btn-primary {
+  background: #00e5ff;
+  color: #001318;
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.btn-primary:hover { background: #5cf0ff; transform: translateY(-1px); }
+.btn-primary:disabled { background: #0a2e34; color: #4a6a72; cursor: not-allowed; transform: none; }
+
+.btn-secondary {
+  background: transparent;
+  color: #e2e8f4;
+  border: 1px solid #1e2a40;
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+.btn-secondary:hover { border-color: #00e5ff; color: #00e5ff; }
+
+.input-dark {
+  background: #111520;
+  border: 1px solid #1e2a40;
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: #e2e8f4;
+  font-size: 14px;
+  width: 100%;
+  transition: border-color 0.15s;
+  outline: none;
+}
+.input-dark:focus { border-color: #00e5ff; }
+.input-dark::placeholder { color: #6a8099; }
