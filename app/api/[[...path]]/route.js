@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs'
 import { getDb, clean, cleanAll } from '@/lib/db'
 import { createSession, getSession, clearSession, createSessionFor, getSessionFor, clearSessionFor, HOSPITAL_COOKIE } from '@/lib/auth'
 import { sendOtpSms, sendWhatsAppNotification } from '@/lib/twilio'
+import { sendOtp as verifySendOtp, checkOtp as verifyCheckOtp } from '@/lib/twilio-verify'
 import { generateMediId } from '@/lib/medi-id'
 import { summarizeVisit, clinicalSummary, drugInteraction, ocrPrescription, faceMatch } from '@/lib/gemini'
 
@@ -73,14 +74,32 @@ async function handleRoute(request, { params }) {
       const body = await request.json()
       const phone = normalizePhone(body.phone)
       if (!phone || phone.length < 10) return E('Valid phone required')
+
+      // Try Twilio Verify (real SMS first, WhatsApp fallback)
+      const sent = await verifySendOtp(phone)
+      if (sent.ok) {
+        // Mark this phone as using Verify mode (no local OTP)
+        await db.collection('otps').deleteMany({ phone })
+        await db.collection('otps').insertOne({ phone, mode: 'verify', created_at: new Date(), expires_at: new Date(Date.now() + 10 * 60 * 1000) })
+        console.log(`[OTP] ${phone} -> Twilio Verify via ${sent.channel} status=${sent.status}`)
+        return J({ ok: true, channel: sent.channel, _sent: true, mode: 'verify' })
+      }
+
+      // Fallback: local OTP + WhatsApp sandbox (best-effort) + dev code for demo
+      console.warn(`[OTP] ${phone} -> Twilio Verify failed (${sent.error}); using local OTP`)
       const code = Math.floor(100000 + Math.random() * 900000).toString()
       const expires_at = new Date(Date.now() + 5 * 60 * 1000)
       await db.collection('otps').deleteMany({ phone })
-      await db.collection('otps').insertOne({ phone, code, expires_at, created_at: new Date(), attempts: 0 })
-      const sent = await sendOtpSms(phone, code)
-      console.log(`[OTP] ${phone} -> ${code} (sent=${sent.ok}, ch=${sent.channel || sent.error})`)
-      // For demo/MVP since Twilio sandbox may not deliver, return dev_code too
-      return J({ ok: true, channel: sent.channel || null, _dev_code: code, _sent: sent.ok, _twilio_error: sent.error || null })
+      await db.collection('otps').insertOne({ phone, code, mode: 'local', expires_at, created_at: new Date(), attempts: 0 })
+      const waSent = await sendOtpSms(phone, code)
+      return J({
+        ok: true,
+        channel: waSent.channel || null,
+        _sent: !!waSent.ok,
+        _twilio_error: sent.error || waSent.error || null,
+        _dev_code: code,
+        mode: 'local',
+      })
     }
 
     if (route === '/auth/verify-otp' && method === 'POST') {
@@ -88,12 +107,21 @@ async function handleRoute(request, { params }) {
       const phone = normalizePhone(body.phone)
       const code = (body.code || '').toString().trim()
       if (!phone || !code) return E('Phone and code required')
+      if (!/^\d{4,8}$/.test(code)) return E('Invalid code format', 400)
+
       const rec = await db.collection('otps').findOne({ phone })
       if (!rec) return E('OTP not found, please request a new one', 400)
       if (new Date(rec.expires_at) < new Date()) return E('OTP expired', 400)
-      if (rec.code !== code) return E('Invalid OTP', 400)
+
+      if (rec.mode === 'verify') {
+        // Validate via Twilio Verify
+        const r = await verifyCheckOtp(phone, code)
+        if (!r.ok) return E(r.status === 'pending' ? 'Invalid OTP' : `Verification ${r.status}`, 400)
+      } else {
+        if (rec.code !== code) return E('Invalid OTP', 400)
+      }
+
       await db.collection('otps').deleteMany({ phone })
-      // Find or create user_id by phone
       let patient = await db.collection('patients').findOne({ phone })
       const userId = patient?.user_id || uuidv4()
       await createSession({ userId, phone })
