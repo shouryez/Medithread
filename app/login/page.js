@@ -64,7 +64,8 @@ export default function Login() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Invalid OTP')
       toast.success('Welcome to MediThread')
-      router.push(data.hasPatient ? '/dashboard' : '/register')
+      // Hard navigation ensures the session cookie is picked up on the next page
+      window.location.href = data.hasPatient ? '/dashboard' : '/register'
     } catch (e) { toast.error(e.message); setOtp(['', '', '', '', '', '']); inputsRef.current[0]?.focus() } finally { setLoading(false) }
   }
 

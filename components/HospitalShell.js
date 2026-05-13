@@ -25,13 +25,13 @@ export default function HospitalShell({ children }) {
       try {
         const r = await fetch('/api/hospital/me')
         const d = await r.json()
-        if (!d.authenticated) { router.push('/hospital/login'); return }
+        if (!d.authenticated) { window.location.href = '/hospital/login'; return }
         setCtx(d)
       } finally { setLoading(false) }
     })()
-  }, [router, pathname])
+  }, [pathname])
 
-  const logout = async () => { await fetch('/api/hospital/auth/logout', { method: 'POST' }); toast.success('Signed out'); router.push('/hospital/login') }
+  const logout = async () => { await fetch('/api/hospital/auth/logout', { method: 'POST' }); toast.success('Signed out'); window.location.href = '/hospital/login' }
 
   if (loading || !ctx) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-[#a855f7]" /></div>
 

@@ -32,20 +32,20 @@ export default function PatientShell({ children }) {
       try {
         const r = await fetch('/api/me')
         const d = await r.json()
-        if (!d.authenticated) { router.push('/login'); return }
-        if (!d.patient) { router.push('/register'); return }
+        if (!d.authenticated) { window.location.href = '/login'; return }
+        if (!d.patient) { window.location.href = '/register'; return }
         setPatient(d.patient)
         // badges
         const dash = await fetch('/api/patient/dashboard').then(r => r.json())
         setBadges({ meds: dash.stats?.activeMeds || 0, consents: dash.stats?.pendingConsents || 0 })
       } finally { setLoading(false) }
     })()
-  }, [router, pathname])
+  }, [pathname])
 
   const logout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' })
     toast.success('Signed out')
-    router.push('/')
+    window.location.href = '/'
   }
 
   if (loading || !patient) {
