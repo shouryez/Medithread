@@ -79,9 +79,21 @@ export default function Login() {
           {step === 1 ? (
             <div>
               <label className="text-xs uppercase tracking-wider text-[#6a8099] mb-2 block">Mobile number</label>
-              <div className="flex gap-2">
-                <span className="input-dark font-mono w-20 text-center flex items-center justify-center">+91</span>
-                <input className="input-dark flex-1" inputMode="numeric" maxLength={10} placeholder="9876543210" value={phone} onChange={e => setPhone(e.target.value.replace(/\D/g, ''))} onKeyDown={e => e.key === 'Enter' && sendOtp()} autoFocus />
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-[#6a8099] pointer-events-none select-none">+91</span>
+                <input
+                  type="tel"
+                  className="input-dark"
+                  style={{ paddingLeft: '3.25rem', letterSpacing: '0.05em' }}
+                  inputMode="numeric"
+                  autoComplete="tel-national"
+                  maxLength={10}
+                  placeholder="9876543210"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); sendOtp() } }}
+                  autoFocus
+                />
               </div>
               <button onClick={sendOtp} disabled={loading} className="btn-primary w-full mt-6 inline-flex items-center justify-center gap-2">
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <>Send OTP <ArrowRight className="w-4 h-4" /></>}
