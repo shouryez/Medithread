@@ -33,12 +33,26 @@ export default function Login() {
   }
 
   const onOtpChange = (i, val) => {
+    // Support paste of full 6-digit code in first box
+    if (i === 0 && val.length > 1) {
+      const digits = val.replace(/\D/g, '').slice(0, 6)
+      const arr = digits.split('').concat(Array(6 - digits.length).fill(''))
+      setOtp(arr)
+      const lastIdx = Math.min(digits.length, 5)
+      setTimeout(() => inputsRef.current[lastIdx]?.focus(), 0)
+      return
+    }
     const v = val.replace(/\D/g, '').slice(0, 1)
     const next = [...otp]; next[i] = v; setOtp(next)
     if (v && i < 5) inputsRef.current[i + 1]?.focus()
   }
   const onOtpKey = (i, e) => {
     if (e.key === 'Backspace' && !otp[i] && i > 0) inputsRef.current[i - 1]?.focus()
+  }
+  const fillDevCode = () => {
+    if (!devCode) return
+    setOtp(devCode.split(''))
+    setTimeout(() => inputsRef.current[5]?.focus(), 0)
   }
 
   const verifyOtp = async () => {
@@ -87,7 +101,9 @@ export default function Login() {
                 ))}
               </div>
               {devCode && (
-                <div className="mt-4 text-center text-xs text-[#ffab40] font-mono">Dev code: {devCode}</div>
+                <button type="button" onClick={fillDevCode} className="mt-4 w-full text-center text-xs text-[#ffab40] font-mono hover:underline">
+                  Tap to auto-fill demo code: {devCode}
+                </button>
               )}
               <button onClick={verifyOtp} disabled={loading} className="btn-primary w-full mt-6 inline-flex items-center justify-center gap-2">
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <>Verify & Continue <ArrowRight className="w-4 h-4" /></>}
