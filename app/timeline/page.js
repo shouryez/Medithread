@@ -17,11 +17,13 @@ export default function TimelinePage() {
 
 function Inner() {
   const [data, setData] = useState(null)
+  const [patient, setPatient] = useState(null)
   const [filters, setFilters] = useState({ year: '', department: '', hospital: '', q: '' })
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [expanded, setExpanded] = useState({})
   const [accordion, setAccordion] = useState({})  // { [visitId]: 'rx' | 'reports' | null }
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -36,6 +38,221 @@ function Inner() {
     setVisibleCount(PAGE_SIZE)
   }
   useEffect(() => { load() }, [filters.year, filters.department, filters.q])
+
+  useEffect(() => {
+    fetch('/api/patient/me').then(r => r.json()).then(d => setPatient(d?.patient || null)).catch(() => {})
+  }, [])
+
+  const exportPdf = async () => {
+    if (!filtered.length) {
+      toast.error('No visits to export')
+      return
+    }
+    setExporting(true)
+    try {
+      const [{ default: jsPDF }, autoTableMod] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable'),
+      ])
+      const autoTable = autoTableMod.default || autoTableMod
+      const doc = new jsPDF({ unit: 'pt', format: 'a4' })
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const margin = 40
+
+      // Header
+      doc.setFillColor(11, 14, 20)
+      doc.rect(0, 0, pageWidth, 70, 'F')
+      doc.setTextColor(0, 229, 255)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(20)
+      doc.text('MediThread', margin, 35)
+      doc.setFontSize(10)
+      doc.setTextColor(226, 232, 244)
+      doc.setFont('helvetica', 'normal')
+      doc.text('Universal Patient Health Record', margin, 52)
+      doc.setFontSize(9)
+      doc.setTextColor(106, 128, 153)
+      doc.text(`Generated: ${format(new Date(), 'dd MMM yyyy, HH:mm')}`, pageWidth - margin, 35, { align: 'right' })
+      doc.text('CONFIDENTIAL', pageWidth - margin, 52, { align: 'right' })
+
+      // Patient block
+      let y = 100
+      doc.setTextColor(20, 24, 32)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(14)
+      doc.text(patient?.full_name || 'Patient', margin, y)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(80, 90, 100)
+      const meta = []
+      if (patient?.medi_id) meta.push(`MediID: ${patient.medi_id}`)
+      if (patient?.dob) meta.push(`DOB: ${format(new Date(patient.dob), 'dd MMM yyyy')}`)
+      if (patient?.gender) meta.push(patient.gender)
+      if (patient?.blood_group) meta.push(`Blood: ${patient.blood_group}`)
+      doc.text(meta.join('  ·  '), margin, y + 14)
+
+      if (patient?.allergies?.length) {
+        doc.setTextColor(220, 53, 69)
+        doc.text(`Allergies: ${patient.allergies.join(', ')}`, margin, y + 28)
+      }
+      if (patient?.chronic_conditions?.length) {
+        doc.setTextColor(255, 138, 0)
+        doc.text(`Chronic: ${patient.chronic_conditions.join(', ')}`, margin, y + 42)
+      }
+
+      y += 60
+      doc.setDrawColor(220, 224, 230)
+      doc.line(margin, y, pageWidth - margin, y)
+      y += 18
+
+      // Title
+      doc.setTextColor(20, 24, 32)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(12)
+      doc.text(`Health Timeline (${filtered.length} visit${filtered.length !== 1 ? 's' : ''})`, margin, y)
+      y += 4
+
+      // Filters applied
+      const appliedFilters = []
+      if (filters.year) appliedFilters.push(`Year: ${filters.year}`)
+      if (filters.department) appliedFilters.push(`Dept: ${filters.department}`)
+      if (filters.hospital) appliedFilters.push(`Hospital: ${filters.hospital}`)
+      if (filters.q) appliedFilters.push(`Search: "${filters.q}"`)
+      if (appliedFilters.length) {
+        doc.setFontSize(8)
+        doc.setTextColor(106, 128, 153)
+        doc.setFont('helvetica', 'italic')
+        doc.text(`Filters — ${appliedFilters.join(' · ')}`, margin, y + 12)
+        y += 6
+      }
+      y += 14
+
+      // Visit table
+      const rows = filtered.map(v => [
+        format(new Date(v.visit_date), 'dd MMM yyyy'),
+        v.hospital?.name || '—',
+        v.department || '—',
+        v.doctor_name || '—',
+        (v.diagnosis || []).join(', ') || '—',
+        v.chief_complaint || '—',
+      ])
+      autoTable(doc, {
+        startY: y,
+        head: [['Date', 'Hospital', 'Dept', 'Doctor', 'Diagnosis', 'Complaint']],
+        body: rows,
+        margin: { left: margin, right: margin },
+        styles: { fontSize: 8, cellPadding: 5, textColor: [30, 30, 30] },
+        headStyles: { fillColor: [0, 229, 255], textColor: [0, 19, 24], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 250, 252] },
+        columnStyles: { 0: { cellWidth: 65 }, 2: { cellWidth: 70 }, 4: { cellWidth: 100 } },
+      })
+
+      // Per-visit details — prescriptions & reports
+      let curY = doc.lastAutoTable.finalY + 24
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(20, 24, 32)
+      doc.text('Visit Details', margin, curY)
+      curY += 12
+
+      for (const v of filtered) {
+        if (curY > 740) { doc.addPage(); curY = 50 }
+        doc.setFontSize(10)
+        doc.setFont('helvetica', 'bold')
+        doc.setTextColor(0, 100, 130)
+        doc.text(`${format(new Date(v.visit_date), 'dd MMM yyyy')} — ${v.hospital?.name || 'Hospital'} (${v.department || ''})`, margin, curY)
+        curY += 6
+        doc.setDrawColor(0, 229, 255)
+        doc.line(margin, curY, pageWidth - margin, curY)
+        curY += 12
+
+        doc.setFontSize(9)
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(50, 50, 50)
+        if (v.doctor_name) {
+          doc.text(`Doctor: ${v.doctor_name}`, margin, curY); curY += 12
+        }
+        if (v.chief_complaint) {
+          const lines = doc.splitTextToSize(`Complaint: ${v.chief_complaint}`, pageWidth - margin * 2)
+          doc.text(lines, margin, curY); curY += lines.length * 11
+        }
+        if (v.diagnosis?.length) {
+          const lines = doc.splitTextToSize(`Diagnosis: ${v.diagnosis.join(', ')}`, pageWidth - margin * 2)
+          doc.text(lines, margin, curY); curY += lines.length * 11
+        }
+        if (v.notes) {
+          const lines = doc.splitTextToSize(`Notes: ${v.notes}`, pageWidth - margin * 2)
+          doc.text(lines, margin, curY); curY += lines.length * 11
+        }
+        if (v.ai_summary) {
+          doc.setTextColor(120, 60, 180)
+          const lines = doc.splitTextToSize(`AI Summary: ${v.ai_summary}`, pageWidth - margin * 2)
+          doc.text(lines, margin, curY); curY += lines.length * 11
+          doc.setTextColor(50, 50, 50)
+        }
+
+        if (v.prescriptions?.length) {
+          if (curY > 720) { doc.addPage(); curY = 50 }
+          curY += 4
+          autoTable(doc, {
+            startY: curY,
+            head: [['Prescriptions', 'Dosage', 'Frequency', 'Duration', 'Status']],
+            body: v.prescriptions.map(p => [
+              p.drug_name || '—',
+              p.dosage || '—',
+              p.frequency || '—',
+              p.duration_days ? `${p.duration_days} days` : '—',
+              p.is_active ? 'Active' : 'Past',
+            ]),
+            margin: { left: margin, right: margin },
+            styles: { fontSize: 8, cellPadding: 4 },
+            headStyles: { fillColor: [168, 85, 247], textColor: [255, 255, 255], fontStyle: 'bold' },
+            theme: 'striped',
+          })
+          curY = doc.lastAutoTable.finalY + 8
+        }
+
+        if (v.reports?.length) {
+          if (curY > 720) { doc.addPage(); curY = 50 }
+          autoTable(doc, {
+            startY: curY,
+            head: [['Reports', 'Type', 'Date']],
+            body: v.reports.map(r => [
+              r.title || '—',
+              (r.report_type || '').toUpperCase(),
+              r.report_date ? format(new Date(r.report_date), 'dd MMM yyyy') : '—',
+            ]),
+            margin: { left: margin, right: margin },
+            styles: { fontSize: 8, cellPadding: 4 },
+            headStyles: { fillColor: [0, 150, 180], textColor: [255, 255, 255], fontStyle: 'bold' },
+            theme: 'striped',
+          })
+          curY = doc.lastAutoTable.finalY + 8
+        }
+
+        curY += 8
+      }
+
+      // Footer on every page
+      const pageCount = doc.internal.getNumberOfPages()
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i)
+        doc.setFontSize(8)
+        doc.setTextColor(150, 150, 150)
+        doc.text('MediThread — Confidential health record. Share only with trusted providers.', margin, doc.internal.pageSize.getHeight() - 20)
+        doc.text(`Page ${i} of ${pageCount}`, pageWidth - margin, doc.internal.pageSize.getHeight() - 20, { align: 'right' })
+      }
+
+      const fname = `medithread-timeline-${patient?.medi_id || 'patient'}-${format(new Date(), 'yyyyMMdd-HHmm')}.pdf`
+      doc.save(fname)
+      toast.success('PDF exported')
+    } catch (e) {
+      console.error('PDF export failed', e)
+      toast.error('Could not export PDF')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Client-side hospital filter (server has dept/year/q only)
   const filtered = useMemo(() => {
@@ -79,8 +296,8 @@ function Inner() {
             {firstVisitYear ? <> · since <span className="text-[#e2e8f4]">{firstVisitYear}</span></> : null}
           </p>
         </div>
-        <button onClick={() => toast('PDF export coming soon', { icon: '📄' })} className="btn-secondary text-xs inline-flex items-center gap-2">
-          <Download className="w-3 h-3" /> Export
+        <button onClick={exportPdf} disabled={exporting || !filtered.length} className="btn-secondary text-xs inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+          {exporting ? <><Loader2 className="w-3 h-3 animate-spin" /> Generating…</> : <><Download className="w-3 h-3" /> Export PDF</>}
         </button>
       </motion.div>
 

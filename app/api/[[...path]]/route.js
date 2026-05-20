@@ -57,6 +57,24 @@ async function logAudit(db, { patient_id, performed_by = null, performed_by_role
   })
 }
 
+/**
+ * Send a notification to a patient via WhatsApp, respecting their notification preference.
+ * Default: opted-in (true) unless explicitly set to false.
+ * NOTE: OTP / security messages should bypass this and call sendWhatsAppNotification directly.
+ */
+async function notifyPatient(db, patientOrId, message) {
+  try {
+    const patient = typeof patientOrId === 'string'
+      ? await db.collection('patients').findOne({ id: patientOrId })
+      : patientOrId
+    if (!patient?.phone) return { ok: false, skipped: true, reason: 'no_phone' }
+    if (patient.notify_whatsapp === false) return { ok: false, skipped: true, reason: 'opted_out' }
+    return await sendWhatsAppNotification(patient.phone, message)
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
 async function handleRoute(request, { params }) {
   const { path = [] } = params
   const route = `/${path.join('/')}`
@@ -179,7 +197,7 @@ async function handleRoute(request, { params }) {
     if (route === '/patient/profile' && method === 'PUT') {
       const p = await requirePatient(db)
       const body = await request.json()
-      const allowed = ['full_name', 'dob', 'gender', 'blood_group', 'city', 'allergies', 'chronic_conditions', 'emergency_contact_name', 'emergency_contact_phone', 'photo_url']
+      const allowed = ['full_name', 'dob', 'gender', 'blood_group', 'city', 'allergies', 'chronic_conditions', 'emergency_contact_name', 'emergency_contact_phone', 'photo_url', 'notify_whatsapp', 'notify_record_access', 'notify_visit_added', 'notify_consent_actions']
       const upd = {}
       for (const k of allowed) if (k in body) upd[k] = body[k]
       await db.collection('patients').updateOne({ id: p.id }, { $set: upd })
@@ -960,7 +978,8 @@ async function handleRoute(request, { params }) {
         await logAudit(db, { patient_id: p.id, performed_by: staff.id, performed_by_role: staff.role, hospital_id: hospital.id, action_type: 'record_viewed' })
         // Notify patient via WhatsApp (best-effort)
         const time = new Date().toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit' })
-        sendWhatsAppNotification(p.phone, `MediThread: Your record was accessed by ${staff.full_name} at ${hospital.name} at ${time}. Review at /consent.`).catch(() => {})
+        // Respect per-patient pref — fire-and-forget
+        notifyPatient(db, p, `MediThread: Your record was accessed by ${staff.full_name} at ${hospital.name} at ${time}. Review at /consent.`).catch(() => {})
       }
       const [visits, medsAll, reports, metrics, audit] = await Promise.all([
         db.collection('visits').find({ patient_id: p.id }).sort({ visit_date: -1 }).toArray(),
@@ -1040,7 +1059,7 @@ async function handleRoute(request, { params }) {
       }
       // notify patient
       const msg = `MediThread: Dr ${staff.full_name} at ${hospital.name} added a new visit record with ${rxs.length} prescription${rxs.length !== 1 ? 's' : ''} to your profile.`
-      sendWhatsAppNotification(p.phone, msg).catch(() => {})
+      notifyPatient(db, p, msg).catch(() => {})
       await db.collection('notifications').insertOne({ id: uuidv4(), patient_id: p.id, title: 'New visit added', body: msg, type: 'info', is_read: false, created_at: new Date() })
       return J({ ok: true, visit: clean(visit), prescriptions: cleanAll(rxs), reports: cleanAll(reps) })
     }

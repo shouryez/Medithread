@@ -19,6 +19,7 @@ const NAV = [
 ]
 const NAV_BOTTOM = [
   { href: '/profile', label: 'Profile', icon: User },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export default function PatientShell({ children }) {

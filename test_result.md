@@ -266,14 +266,16 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Gemini AI medicine-scan + summarise + drug-check + OCR (model upgrade to 2.5-flash)"
+    - "Patient profile update with notification preferences (notify_whatsapp + per-type)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
   - agent: "main"
-    message: "Phase 2 (Hospital Portal + AI). Added: hospital auth (bcrypt + separate JWT cookie 'mt_hospital_session'), /api/hospital/auth/(register|login|logout|me), /api/hospital/dashboard, /api/hospital/search?q=, /api/consent/request, /api/consent/verify, /api/hospital/patient/:mediId (consent-gated full record), /api/hospital/patient/:mediId/visit (visit + rx + reports create with verification token gate), /api/hospital/audit, /api/hospital/staff (GET/POST admin-only), /api/hospital/analytics, /api/ai/summarise, /api/ai/drug-check, /api/ai/ocr (Gemini Vision), /api/verify/face-match (Gemini Vision, returns token if confidence >= 0.75), /api/notify/otp. Patient login OTP page improved with paste-support and tap-to-fill demo code. Hospital portal pages created at /hospital/{login,register,dashboard,search,patient/[mediId],visit/new,audit,staff,analytics} with purple accent theme. Please run a complete demo flow test."
+    message: "Phase 3 fix + features. (1) Gemini API was returning 404 for gemini-1.5-flash (deprecated for this key). Updated /app/lib/gemini.js to use gemini-2.5-flash and gemini-2.5-pro as default models with a safeGenerate() fallback chain covering 2.5/flash-latest/pro-latest, only falling through on availability/quota errors (not validation). Verified end-to-end with a real medicine image — medicineScan returns full structured JSON. (2) Added timeline PDF export using jsPDF + jspdf-autotable: dynamic import on demand, includes patient header, visit table, per-visit details, prescriptions & reports tables, footer with page numbers. (3) Added Settings page at /app/app/settings/page.js with WhatsApp master toggle + per-event toggles (record access, visit added, consent actions). Added new allowed fields to PUT /api/patient/profile: notify_whatsapp, notify_record_access, notify_visit_added, notify_consent_actions. Created notifyPatient(db, patient, message) helper that skips when notify_whatsapp === false. Updated record_viewed + visit_created notifications to use notifyPatient. Security messages (login OTP, consent OTP) still use sendWhatsAppNotification directly. (4) Added /settings to PatientShell nav. Please retest: (a) POST /api/ai/medicine-scan returns structured JSON (no error key) for a real medicine image, (b) GET /api/ai/summarise / drug-check / OCR all return data (not fallback null), (c) PUT /api/patient/profile accepts notify_whatsapp:false and the field persists in GET /api/me, (d) Existing flows (consent, visit, dashboard) still pass."
 
 backend_new:
   - task: "Hospital auth (register/login/logout/me)"
@@ -362,3 +364,34 @@ backend_new:
         comment: "✅ AI endpoints working correctly. GET /api/ai/summarise?patientId returns 200 with summary (accepts fallback 'unavailable' when Gemini quota issue). POST /api/ai/drug-check (Warfarin + Aspirin) returns 200 with severity, interactions, recommendation (accepts fallback severity 'none'). POST /api/ai/ocr with blank image returns 200 with items:[] (empty array acceptable). POST /api/verify/face-match with blank images returns 200 with match, confidence, reasoning, ok, token (ok:false expected for non-face images). All AI endpoints require staff session (401 without auth). Endpoints never crash with 500, always return 200 with fallback responses when Gemini fails."
   - agent: "testing"
     message: "✅ ALL PHASE 2 BACKEND TESTS PASSED (6/6 tasks, 9/9 test sections). Comprehensive end-to-end testing completed for Hospital Portal + AI endpoints. All major functionalities working correctly: (A) Patient setup with OTP + registration, (B) Hospital auth with separate cookie session (mt_hospital_session), (C) Patient search by MediID/phone + consent OTP flow with attempt tracking, (D) Consent-gated patient view with audit logging, (E) AI endpoints (summarise/drug-check/OCR/face-match) with fallback responses, (F) Hospital create visit with verification token + nested prescriptions/reports, (G) Hospital audit/analytics/staff management, (H) Patient sees audit on consent page, (I) Logout & idempotency. Cookie-based authentication working properly with separate sessions for patient (mt_session) and hospital (mt_hospital_session). Minor observations: (1) Gemini API returns fallback responses due to quota/model version issue - acceptable per requirements, endpoints never crash, (2) Twilio WhatsApp notifications fail (sandbox requires opt-in) - expected, (3) Face-match verification fails with blank images - expected behavior. No critical issues found. Phase 2 backend is production-ready."
+  - task: "Gemini AI model upgrade (gemini-2.5-flash) + medicine-scan endpoint"
+    implemented: true
+    working: true
+    file: "lib/gemini.js, app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Upgraded Gemini from deprecated gemini-1.5-flash to gemini-2.5-flash with safeGenerate() fallback chain covering 2.5/flash-latest/pro-latest. Falls through only on availability/quota errors (not validation). Added POST /api/ai/medicine-scan (patient session) that returns structured JSON with medicine data (name, generic_name, strength, form, uses, side_effects, warnings, etc.) or specific error message."
+      - working: true
+        agent: "testing"
+        comment: "✅ Gemini 2.5-flash upgrade working correctly. POST /api/ai/medicine-scan (patient session) with test medicine image (PARACETAMOL 500mg) returns 200 with full structured JSON: {generic_name: 'Paracetamol', strength: '500mg', form: 'tablet', category: 'Analgesic, Antipyretic', uses: [...], typical_dosage: '...', common_side_effects: [...], serious_side_effects: [...], warnings: [...], avoid_with: [...], pregnancy_safety: 'safe', storage: '...', confidence: 1, disclaimer: '...'}. NOT the old fallback 'AI scan unavailable right now'. POST /api/ai/drug-check (hospital session, Aspirin + Warfarin) returns severity='severe' with detailed interaction description. NOT the fallback 'Unable to check interactions automatically'. GET /api/ai/summarise?patientId (hospital session) returns proper clinical summary: '• 36-year-old male, Rajesh Kumar. No known allergies. • Diagnosed with controlled Type 2 Diabetes Mellitus. • Currently on Metformin 500mg 1 tab Twice daily. • Recent history of viral fever and URI (April 2026). • Recommend routine diabetes follow-up and management.' NOT the fallback 'unavailable'. POST /api/ai/ocr (hospital session) returns {items: []} array. All AI endpoints now using gemini-2.5-flash successfully, no more 404 'models/gemini-1.5-flash is not found' errors."
+  - task: "Patient notification preferences (notify_whatsapp + per-event toggles)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Added notification preference fields to patient profile: notify_whatsapp (master toggle), notify_record_access, notify_visit_added, notify_consent_actions. PUT /api/patient/profile accepts these fields. Created notifyPatient(db, patient, message) helper that respects notify_whatsapp preference (skips if false). Updated record_viewed + visit_created notifications to use notifyPatient. Security messages (login OTP, consent OTP) still use sendWhatsAppNotification directly (bypass preference)."
+      - working: true
+        agent: "testing"
+        comment: "✅ Notification preferences working correctly. PUT /api/patient/profile with {notify_whatsapp: false, notify_record_access: false, notify_visit_added: true, notify_consent_actions: true} returns 200 with patient object containing all four fields set correctly. GET /api/me returns patient with notify_whatsapp=false persisted. PUT /api/patient/profile with {notify_whatsapp: true} successfully toggles back to true. All preference fields persist correctly across requests. Master toggle (notify_whatsapp) and per-event toggles (notify_record_access, notify_visit_added, notify_consent_actions) all working as expected."
+  - agent: "testing"
+    message: "✅ PHASE 3 REGRESSION + FEATURE TEST PASSED (6/6 test sections). Tested Gemini 2.5-flash upgrade + notification preferences. All tests passed: (A) Health check ✅, (B) Patient OTP + register ✅, (C) Notification preferences ✅ (notify_whatsapp toggle persists correctly), (D1) Gemini medicine-scan ✅ (returns full structured medicine data, NOT old fallback), (D2) Gemini hospital AI endpoints ✅ (drug-check severity='severe', summarise returns clinical summary, OCR returns items array), (E) Regression smoke tests ✅ (dashboard, visits, medications, reports, consents all working). CRITICAL CONFIRMATION: Gemini medicine-scan no longer hits 'models/gemini-1.5-flash is not found for API version v1beta' error and now returns real structured medicine data with gemini-2.5-flash. Drug-check returns actual severity (not fallback). Summarise returns actual clinical summary (not fallback). Notification preferences persist correctly. No critical issues found. All existing endpoints still working (regression passed)."
+
