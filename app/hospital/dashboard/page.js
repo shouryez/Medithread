@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
 import { format, formatDistanceToNow } from 'date-fns'
-import { Search, Users, FileWarning, ShieldCheck, ArrowRight, Loader2, Inbox, Check, X, Stethoscope } from 'lucide-react'
+import { Search, Users, FileWarning, ShieldCheck, ArrowRight, Loader2, Inbox, Check, X, Stethoscope, Sparkles } from 'lucide-react'
 
 export default function HDashboard() { return <HospitalShell><Inner /></HospitalShell> }
 function Inner() {
