@@ -4,13 +4,14 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { LayoutDashboard, Activity, Pill, FileText, Shield, TrendingUp, Bell, User, Settings, LogOut, Loader2 } from 'lucide-react'
+import { LayoutDashboard, Activity, Pill, FileText, Shield, TrendingUp, Bell, User, Settings, LogOut, Loader2, ScanLine } from 'lucide-react'
 import Logo from '@/components/Logo'
 
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/timeline', label: 'Timeline', icon: Activity },
   { href: '/medications', label: 'Medications', icon: Pill, badgeKey: 'meds' },
+  { href: '/medicine-scan', label: 'Scan Medicine', icon: ScanLine },
   { href: '/reports', label: 'Reports', icon: FileText },
   { href: '/consent', label: 'Consent', icon: Shield, badgeKey: 'consents' },
   { href: '/chronic', label: 'Chronic Tracker', icon: TrendingUp },

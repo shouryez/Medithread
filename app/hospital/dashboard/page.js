@@ -10,8 +10,37 @@ export default function HDashboard() { return <HospitalShell><Inner /></Hospital
 function Inner() {
   const [data, setData] = useState(null)
   const [now, setNow] = useState(new Date())
+  const [seeded, setSeeded] = useState(true)
+  const [seeding, setSeeding] = useState(false)
+  const [inbound, setInbound] = useState([])
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t) }, [])
-  useEffect(() => { fetch('/api/hospital/dashboard').then(r => r.json()).then(setData) }, [])
+
+  const load = async () => {
+    const d = await fetch('/api/hospital/dashboard').then(r => r.json())
+    setData(d)
+    const st = await fetch('/api/hospital/demo/status').then(r => r.json()).catch(() => ({ seeded: false }))
+    setSeeded(!!st.seeded)
+    const ib = await fetch('/api/hospital/inbound-visits').then(r => r.json()).catch(() => ({ visits: [] }))
+    setInbound(ib.visits || [])
+  }
+  useEffect(() => { load() }, [])
+
+  const seedDemo = async () => {
+    setSeeding(true)
+    try {
+      const r = await fetch('/api/hospital/demo/seed', { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      toast.success(d.already_seeded ? 'Demo data already loaded' : `Loaded ${d.patients} demo patients`)
+      await load()
+    } catch (e) { toast.error(e.message) } finally { setSeeding(false) }
+  }
+
+  const actInbound = async (id, action) => {
+    const r = await fetch(`/api/hospital/inbound-visits/${id}/${action}`, { method: 'POST' })
+    if (r.ok) { toast.success(`Visit ${action}d`); await load() }
+    else toast.error('Failed')
+  }
 
   if (!data) return <div className="flex items-center justify-center h-96"><Loader2 className="w-6 h-6 animate-spin text-[#a855f7]" /></div>
 
@@ -29,11 +58,16 @@ function Inner() {
           <h1 className="text-3xl font-bold">{greet}, Dr {data.staff.full_name.split(' ').slice(-1)[0]}</h1>
           <p className="text-[#6a8099] text-sm mt-1">{data.hospital.name} · {data.hospital.city}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="text-right text-xs text-[#6a8099]">
             <div className="font-mono text-lg text-[#a855f7]">{format(now, 'HH:mm:ss')}</div>
             <div>{format(now, 'EEEE, dd MMM yyyy')}</div>
           </div>
+          {!seeded && (
+            <button onClick={seedDemo} disabled={seeding} className="btn-secondary text-xs inline-flex items-center gap-2">
+              <Sparkles className="w-3 h-3" /> {seeding ? 'Loading…' : 'Load demo data'}
+            </button>
+          )}
           <Link href="/hospital/search" className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 font-semibold text-sm" style={{ background: '#a855f7', color: '#0b0e14' }}><Search className="w-4 h-4" /> Search Patient</Link>
         </div>
       </motion.div>
@@ -45,6 +79,40 @@ function Inner() {
             <div className="flex items-start justify-between"><div><div className="text-xs text-[#6a8099] uppercase tracking-wider">{s.l}</div><div className="text-3xl font-bold mt-2" style={{ color: s.c }}>{s.v}</div></div><Icon className="w-4 h-4" style={{ color: s.c, opacity: 0.6 }} /></div>
           </div>
         )})}
+      </motion.div>
+
+      <motion.div variants={fade} className="card-accent-purple p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold inline-flex items-center gap-2"><Inbox className="w-4 h-4 text-[#ffab40]" /> Patient-submitted visits</h2>
+          <span className="text-xs text-[#6a8099]">{inbound.length} pending</span>
+        </div>
+        {inbound.length === 0 ? (
+          <div className="text-center py-6 text-xs text-[#6a8099]">No pending verifications. When a patient self-reports a visit at your hospital, it appears here.</div>
+        ) : (
+          <div className="space-y-2">
+            {inbound.map(v => (
+              <div key={v.id} className="p-3 rounded-lg" style={{ background: '#0b0e14', border: '1px solid #1e2a40' }}>
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-mono text-[#a855f7]">{v.patient?.medi_id || '—'}</div>
+                    <div className="font-semibold">{v.patient?.full_name || 'Unknown patient'}</div>
+                    <div className="text-xs text-[#6a8099]">{v.department} · {format(new Date(v.visit_date), 'dd MMM yyyy, HH:mm')}</div>
+                    {v.chief_complaint && <div className="text-xs italic text-[#6a8099] mt-1">“{v.chief_complaint}”</div>}
+                    {v.patient?.allergies?.length > 0 && (
+                      <div className="inline-flex items-center gap-1 text-[10px] text-[#ff5252] mt-1">
+                        ⚠ Allergies: {v.patient.allergies.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-2 flex-shrink-0">
+                    <button onClick={() => actInbound(v.id, 'deny')} className="px-3 py-1.5 rounded-md text-xs" style={{ background: 'rgba(255,82,82,0.12)', color: '#ff5252', border: '1px solid #ff5252' }}><X className="w-3 h-3 inline" /> Deny</button>
+                    <button onClick={() => actInbound(v.id, 'approve')} className="px-3 py-1.5 rounded-md text-xs font-semibold" style={{ background: '#a855f7', color: '#0b0e14' }}><Check className="w-3 h-3 inline" /> Approve</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </motion.div>
 
       <motion.div variants={fade} className="card-accent-purple p-4 mb-6">

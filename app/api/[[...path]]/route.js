@@ -6,7 +6,7 @@ import { createSession, getSession, clearSession, createSessionFor, getSessionFo
 import { sendOtpSms, sendWhatsAppNotification } from '@/lib/twilio'
 import { sendOtp as verifySendOtp, checkOtp as verifyCheckOtp } from '@/lib/twilio-verify'
 import { generateMediId } from '@/lib/medi-id'
-import { summarizeVisit, clinicalSummary, drugInteraction, ocrPrescription, faceMatch } from '@/lib/gemini'
+import { summarizeVisit, clinicalSummary, drugInteraction, ocrPrescription, faceMatch, medicineScan } from '@/lib/gemini'
 
 function cors(res) {
   res.headers.set('Access-Control-Allow-Origin', process.env.CORS_ORIGINS || '*')
@@ -284,6 +284,9 @@ async function handleRoute(request, { params }) {
         ai_summary: null,
         ai_summary_generated_at: null,
         follow_up_date: body.follow_up_date || null,
+        // Patient-initiated visits start as "pending" so the hospital can verify them.
+        verification_status: 'pending',
+        created_by: 'patient',
         created_at: new Date(),
       }
       // Generate AI summary asynchronously (don't block)
@@ -295,7 +298,14 @@ async function handleRoute(request, { params }) {
         }
       } catch {}
       await db.collection('visits').insertOne(visit)
-      await logAudit(db, { patient_id: p.id, action_type: 'visit_created', metadata: { visit_id: visit.id } })
+      await logAudit(db, { patient_id: p.id, action_type: 'visit_created', metadata: { visit_id: visit.id, by: 'patient' } })
+      // Notify hospital if linked
+      if (hospital_id) {
+        const h = await db.collection('hospitals').findOne({ id: hospital_id })
+        if (h?.contact_phone) {
+          sendWhatsAppNotification(h.contact_phone, `MediThread: ${p.full_name} added a new visit to ${h.name}. Open the portal to approve.`).catch(() => {})
+        }
+      }
       return J({ ok: true, visit: clean(visit) })
     }
 
@@ -549,9 +559,32 @@ async function handleRoute(request, { params }) {
       })
     }
 
+    // ===== PUBLIC HOSPITALS LIST =====
+    if (route === '/hospitals/public' && method === 'GET') {
+      const hospitals = await db.collection('hospitals').find({ is_verified: true }).sort({ name: 1 }).limit(100).toArray()
+      return J({ hospitals: hospitals.map(h => ({ id: h.id, name: h.name, city: h.city, address: h.address || '' })) })
+    }
+
+    // ===== AI MEDICINE SCAN (patient) =====
+    if (route === '/ai/medicine-scan' && method === 'POST') {
+      await requirePatient(db)
+      const body = await request.json()
+      if (!body.imageBase64) return E('imageBase64 required')
+      const result = await medicineScan(body.imageBase64)
+      return J(result)
+    }
+
     // ===== SEED DEMO DATA =====
+    if (route === '/demo/status' && method === 'GET') {
+      const p = await requirePatient(db)
+      const visits = await db.collection('visits').countDocuments({ patient_id: p.id })
+      return J({ seeded: visits > 0 })
+    }
     if (route === '/demo/seed' && method === 'POST') {
       const p = await requirePatient(db)
+      // Idempotent: skip if already seeded
+      const existing = await db.collection('visits').countDocuments({ patient_id: p.id })
+      if (existing > 0) return J({ ok: true, already_seeded: true })
       // create 2 hospitals if not exist
       const h1 = {
         id: uuidv4(), name: 'Apollo Hospitals', registration_no: 'APL-001',
@@ -679,6 +712,122 @@ async function handleRoute(request, { params }) {
       const ctx = await getCurrentStaff()
       if (!ctx) return J({ authenticated: false })
       return J({ authenticated: true, staff: { ...clean(ctx.staff), password_hash: undefined }, hospital: clean(ctx.hospital) })
+    }
+
+    // ----- HOSPITAL DEMO SEED -----
+    if (route === '/hospital/demo/status' && method === 'GET') {
+      const { hospital } = await requireStaff()
+      const seeded = await db.collection('visits').countDocuments({ hospital_id: hospital.id })
+      return J({ seeded: seeded > 0 })
+    }
+    if (route === '/hospital/demo/seed' && method === 'POST') {
+      const { hospital, staff } = await requireStaff()
+      const existing = await db.collection('visits').countDocuments({ hospital_id: hospital.id })
+      if (existing > 0) return J({ ok: true, already_seeded: true })
+
+      // Create 3 sample patients in this hospital with visits.
+      const samplePatients = [
+        { name: 'Ananya Iyer', dob: '1988-03-12', gender: 'female', bg: 'A+', allergies: ['Penicillin'], cond: ['Hypertension'], phone: '+919811000111' },
+        { name: 'Rahul Verma', dob: '1975-07-22', gender: 'male', bg: 'O+', allergies: [], cond: ['Type 2 Diabetes'], phone: '+919811000222' },
+        { name: 'Sneha Kapoor', dob: '1995-11-30', gender: 'female', bg: 'B-', allergies: ['Sulfa'], cond: [], phone: '+919811000333' },
+      ]
+      const created = []
+      for (const sp of samplePatients) {
+        const existingP = await db.collection('patients').findOne({ phone: sp.phone })
+        if (existingP) { created.push(existingP); continue }
+        const mediId = await generateMediId(hospital.city || 'Bangalore')
+        const p = {
+          id: uuidv4(), user_id: uuidv4(), medi_id: mediId, full_name: sp.name, phone: sp.phone,
+          dob: sp.dob, gender: sp.gender, blood_group: sp.bg, city: hospital.city || 'Bangalore',
+          photo_url: null, aadhaar_hash: null, abha_id: null,
+          emergency_contact_name: 'Family', emergency_contact_phone: sp.phone,
+          allergies: sp.allergies, chronic_conditions: sp.cond, created_at: new Date(),
+        }
+        await db.collection('patients').insertOne(p)
+        created.push(p)
+      }
+      // Visits + 1 patient-initiated pending visit
+      const visits = []
+      const today = new Date()
+      for (let i = 0; i < created.length; i++) {
+        const p = created[i]
+        const v = {
+          id: uuidv4(), patient_id: p.id, hospital_id: hospital.id, doctor_id: staff.id, doctor_name: staff.full_name,
+          visit_date: new Date(today.getTime() - i * 86400000),
+          department: ['Cardiology', 'Endocrinology', 'General Medicine'][i],
+          chief_complaint: ['Chest pain on exertion', 'HbA1c follow-up', 'Mild fever, body ache'][i],
+          diagnosis: [['Stable angina'], ['Type 2 DM - controlled'], ['Viral fever']][i],
+          notes: 'Routine consultation. Patient stable.', ai_summary: null, ai_summary_generated_at: null,
+          follow_up_date: null, verification_status: 'approved', created_by: 'hospital',
+          created_at: new Date(),
+        }
+        visits.push(v)
+      }
+      // one patient-initiated pending visit (the interlink demo)
+      visits.push({
+        id: uuidv4(), patient_id: created[0].id, hospital_id: hospital.id, doctor_id: null, doctor_name: null,
+        visit_date: new Date(), department: 'General Medicine',
+        chief_complaint: 'Self-reported headache; uploaded report',
+        diagnosis: [], notes: 'Patient added this visit themselves. Pending hospital review.',
+        ai_summary: null, ai_summary_generated_at: null, follow_up_date: null,
+        verification_status: 'pending', created_by: 'patient', created_at: new Date(),
+      })
+      await db.collection('visits').insertMany(visits)
+      // prescriptions on the first visit
+      await db.collection('prescriptions').insertMany([
+        { id: uuidv4(), visit_id: visits[0].id, patient_id: created[0].id, drug_name: 'Atorvastatin 20mg', dosage: '1 tab', frequency: 'OD at night', duration_days: 90, instructions: 'After dinner', image_url: null, is_active: true, reminder_enabled: false, prescribed_by: staff.id, start_date: new Date(), created_at: new Date() },
+        { id: uuidv4(), visit_id: visits[1].id, patient_id: created[1].id, drug_name: 'Metformin 500mg', dosage: '1 tab', frequency: 'BD', duration_days: 90, instructions: 'With meals', image_url: null, is_active: true, reminder_enabled: false, prescribed_by: staff.id, start_date: new Date(), created_at: new Date() },
+      ])
+      // approved consents so hospital can view these patients
+      await db.collection('access_consents').insertMany(created.map(p => ({
+        id: uuidv4(), patient_id: p.id, hospital_id: hospital.id, status: 'approved',
+        otp_code: '000000', otp_expires_at: new Date(),
+        approved_at: new Date(), expires_at: new Date(Date.now() + 4 * 3600 * 1000),
+        created_at: new Date(), requested_by: staff.id,
+      })))
+      // audit logs
+      await db.collection('audit_logs').insertMany(visits.filter(v => v.verification_status === 'approved').map(v => ({
+        id: uuidv4(), patient_id: v.patient_id, performed_by: staff.id, performed_by_role: staff.role,
+        hospital_id: hospital.id, action_type: 'visit_created', ip_address: null,
+        metadata: { visit_id: v.id, demo: true }, created_at: new Date(),
+      })))
+      return J({ ok: true, patients: created.length, visits: visits.length })
+    }
+
+    // ----- HOSPITAL INBOUND VISITS (patient-initiated, pending verification) -----
+    if (route === '/hospital/inbound-visits' && method === 'GET') {
+      const { hospital } = await requireStaff()
+      const visits = await db.collection('visits').find({
+        hospital_id: hospital.id, verification_status: 'pending', created_by: 'patient',
+      }).sort({ created_at: -1 }).limit(50).toArray()
+      const patientIds = [...new Set(visits.map(v => v.patient_id))]
+      const patients = patientIds.length ? await db.collection('patients').find({ id: { $in: patientIds } }).toArray() : []
+      const pmap = Object.fromEntries(patients.map(p => [p.id, p]))
+      return J({ visits: visits.map(v => ({
+        ...clean(v),
+        patient: pmap[v.patient_id] ? { id: pmap[v.patient_id].id, medi_id: pmap[v.patient_id].medi_id, full_name: pmap[v.patient_id].full_name, allergies: pmap[v.patient_id].allergies || [] } : null,
+      })) })
+    }
+    const inboundMatch = route.match(/^\/hospital\/inbound-visits\/([^/]+)\/(approve|deny)$/)
+    if (inboundMatch && method === 'POST') {
+      const { staff, hospital } = await requireStaff()
+      const [, vid, action] = inboundMatch
+      const v = await db.collection('visits').findOne({ id: vid, hospital_id: hospital.id })
+      if (!v) return E('Visit not found', 404)
+      const status = action === 'approve' ? 'approved' : 'denied'
+      await db.collection('visits').updateOne({ id: vid }, { $set: { verification_status: status, verified_by: staff.id, verified_at: new Date() } })
+      await logAudit(db, {
+        patient_id: v.patient_id, performed_by: staff.id, performed_by_role: staff.role,
+        hospital_id: hospital.id, action_type: action === 'approve' ? 'verification_passed' : 'verification_failed',
+        metadata: { visit_id: vid, scope: 'patient_visit' },
+      })
+      // notify patient via in-app
+      await db.collection('notifications').insertOne({
+        id: uuidv4(), patient_id: v.patient_id, title: action === 'approve' ? 'Visit verified by hospital' : 'Visit needs more info',
+        body: action === 'approve' ? `${hospital.name} confirmed your self-reported visit on ${new Date(v.visit_date).toLocaleDateString()}.` : `${hospital.name} could not verify your self-reported visit. Please contact them or correct details.`,
+        type: 'info', is_read: false, created_at: new Date(),
+      })
+      return J({ ok: true })
     }
 
     // ----- HOSPITAL DASHBOARD -----

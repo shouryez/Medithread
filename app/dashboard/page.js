@@ -16,12 +16,16 @@ function DashboardInner() {
   const [me, setMe] = useState(null)
   const [data, setData] = useState(null)
   const [seeding, setSeeding] = useState(false)
+  const [seeded, setSeeded] = useState(true)
+  const [showAddVisit, setShowAddVisit] = useState(false)
 
   const load = async () => {
     const meRes = await fetch('/api/me').then(r => r.json())
     setMe(meRes.patient)
     const dash = await fetch('/api/patient/dashboard').then(r => r.json())
     setData(dash)
+    const st = await fetch('/api/demo/status').then(r => r.json()).catch(() => ({ seeded: false }))
+    setSeeded(!!st.seeded)
   }
   useEffect(() => { load() }, [])
 
@@ -31,7 +35,7 @@ function DashboardInner() {
       const r = await fetch('/api/demo/seed', { method: 'POST' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error)
-      toast.success('Demo data loaded')
+      toast.success(d.already_seeded ? 'Demo data already loaded' : 'Demo data loaded')
       await load()
     } catch (e) { toast.error(e.message) } finally { setSeeding(false) }
   }
@@ -64,9 +68,14 @@ function DashboardInner() {
           <h1 className="text-3xl md:text-4xl font-bold">{greet}, {firstName}</h1>
           <p className="text-[#6a8099] text-sm mt-1">Here’s a quick view of your health record.</p>
         </div>
-        <button onClick={seedDemo} disabled={seeding} className="btn-secondary text-xs inline-flex items-center gap-2">
-          <Sparkles className="w-3 h-3" /> {seeding ? 'Loading…' : 'Load demo data'}
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowAddVisit(true)} className="btn-secondary text-xs inline-flex items-center gap-2"><Plus className="w-3 h-3" /> Add visit</button>
+          {!seeded && (
+            <button onClick={seedDemo} disabled={seeding} className="btn-secondary text-xs inline-flex items-center gap-2">
+              <Sparkles className="w-3 h-3" /> {seeding ? 'Loading…' : 'Load demo data'}
+            </button>
+          )}
+        </div>
       </motion.div>
 
       {me.allergies?.length > 0 && (
@@ -149,10 +158,71 @@ function DashboardInner() {
       <motion.div variants={fadeUp} className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <QuickAction label="Share MediID" sub="Copy to clipboard" onClick={() => { navigator.clipboard.writeText(me.medi_id); toast.success('MediID copied') }} />
         <Link href={`/emergency/${me.medi_id}`} target="_blank"><QuickActionInner label="Emergency Card" sub="Open public card" /></Link>
+        <Link href="/medicine-scan"><QuickActionInner label="Scan Medicine" sub="AI medicine info" /></Link>
         <Link href="/chronic"><QuickActionInner label="Add Reading" sub="Log a metric" /></Link>
-        <Link href="/medications"><QuickActionInner label="View Medications" sub="Active rx" /></Link>
       </motion.div>
+      {showAddVisit && <AddVisitModal onClose={() => setShowAddVisit(false)} onSaved={async () => { await load(); setShowAddVisit(false) }} />}
     </motion.div>
+  )
+}
+
+function AddVisitModal({ onClose, onSaved }) {
+  const [hospitals, setHospitals] = useState([])
+  const [form, setForm] = useState({ hospital_id: '', department: 'General Medicine', visit_date: new Date().toISOString().slice(0, 16), chief_complaint: '', diagnosis: '', notes: '' })
+  const [loading, setLoading] = useState(false)
+  useEffect(() => { fetch('/api/hospitals/public').then(r => r.json()).then(d => setHospitals(d.hospitals || [])) }, [])
+  const save = async () => {
+    if (!form.hospital_id) return toast.error('Select a hospital')
+    setLoading(true)
+    try {
+      const body = { ...form, diagnosis: form.diagnosis.split(',').map(s => s.trim()).filter(Boolean) }
+      const r = await fetch('/api/visits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!r.ok) throw new Error('Failed')
+      toast.success('Visit submitted — hospital will verify')
+      onSaved()
+    } catch (e) { toast.error(e.message) } finally { setLoading(false) }
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={onClose}>
+      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-full max-w-md card-accent-cyan p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold">Add visit</h2>
+          <button onClick={onClose}><span className="text-[#6a8099]">×</span></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs uppercase tracking-wider text-[#6a8099] mb-1 block">Hospital</label>
+            <select className="input-dark" value={form.hospital_id} onChange={e => setForm({ ...form, hospital_id: e.target.value })}>
+              <option value="">— Select a registered hospital —</option>
+              {hospitals.map(h => <option key={h.id} value={h.id}>{h.name} · {h.city}</option>)}
+            </select>
+            {hospitals.length === 0 && <div className="text-[10px] text-[#6a8099] mt-1">No verified hospitals yet. Ask a hospital to register at /hospital/register</div>}
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-wider text-[#6a8099] mb-1 block">Date & time</label>
+            <input type="datetime-local" className="input-dark" value={form.visit_date} onChange={e => setForm({ ...form, visit_date: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-wider text-[#6a8099] mb-1 block">Department</label>
+            <input className="input-dark" value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-wider text-[#6a8099] mb-1 block">Chief complaint</label>
+            <input className="input-dark" value={form.chief_complaint} onChange={e => setForm({ ...form, chief_complaint: e.target.value })} placeholder="What brought you in?" />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-wider text-[#6a8099] mb-1 block">Diagnosis (comma separated)</label>
+            <input className="input-dark" value={form.diagnosis} onChange={e => setForm({ ...form, diagnosis: e.target.value })} placeholder="e.g., Viral fever, URTI" />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-wider text-[#6a8099] mb-1 block">Notes</label>
+            <textarea className="input-dark min-h-[60px]" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+          </div>
+        </div>
+        <button onClick={save} disabled={loading} className="btn-primary w-full mt-4">{loading ? 'Saving…' : 'Submit for verification'}</button>
+        <p className="text-[10px] text-[#6a8099] text-center mt-2">The selected hospital will see this in their inbound queue and verify it.</p>
+      </motion.div>
+    </div>
   )
 }
 
